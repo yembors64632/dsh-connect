@@ -66,6 +66,87 @@
 Trae 和 Qoder 各一个。新增之后面板里立刻能看到这一行，但要**重启 DSH** 之后，
 它的模型才会进模型选择器。
 
+#### 凭据放在哪
+
+三家读同一个目录：容器里是 `/root/.dsh/connect-auth/`，宿主机就是 `~/.dsh/connect-auth/`。
+一个渠道一个文件，都是 **0600 明文** —— 所以别提交进 git，也别贴到公开的地方。
+
+| 渠道 | 文件 | 关键字段 |
+|---|---|---|
+| WorkBuddy 各账号 | `workbuddy<N>.json` | `auth.accessToken`、`auth.refreshToken`（插件靠它自动续期） |
+| Trae | `trae.json` | `token`、`deviceId`、`appVersionCode` |
+| Qoder CN（优先） | `qoder-session.json` | `token`（`dt-` 开头） |
+| Qoder CN（兜底） | `qoder.pat` | 一行纯文本，`pt-` 开头 |
+
+#### 凭据的格式
+
+**`workbuddy1.json`** —— 就是桌面 App 存的那份结构，外层是账号、里层是令牌：
+
+```json
+{
+  "account": { "nickname": "…", "phoneNumber": "…", "type": "personal" },
+  "auth": {
+    "accessToken": "…",
+    "refreshToken": "…",
+    "expiresAt": 1790000000000,
+    "tokenType": "Bearer",
+    "domain": "www.workbuddy.cn"
+  }
+}
+```
+
+企业版账号在这个结构里带企业标识，插件据此改发企业版请求头、并改问企业版额度接口 ——
+个人版接口对企业号会返回空账户表，界面上就成了"0 积分"。
+
+**`trae.json`** —— 由导出脚本生成，字段固定：
+
+```json
+{
+  "formatVersion": 1,
+  "gateway": "https://…",
+  "appVersionCode": 1227681842690,
+  "token": "…",
+  "refreshToken": "…",
+  "userId": "…",
+  "deviceId": "…",
+  "account": { "username": "…", "scope": "marscode" }
+}
+```
+
+三个字段是承重的：`deviceId` 缺了签到会被上游拒（`9004`）；`appVersionCode` 是倍率接口的
+筛选键，写错或漏掉**不报错，只是倍率整列空白**；`token` 过期则模型直接不可用。
+
+**`qoder-session.json`**：
+
+```json
+{ "token": "dt-…", "refreshToken": "…", "expiresAt": "2026-10-23T17:10:56Z", "uid": "…" }
+```
+
+#### 怎么获取
+
+凭据都在各个桌面 App 的加密存储或系统钥匙串里，所以**只能在装了对应 App 的机器上导**，
+导完直接落在上面那个目录，**30 秒内生效，不用重启**。统一入口是一条命令：
+
+```sh
+node scripts/export-connect-credentials.mjs                          # 能自动导的全导 + 只读校验
+node scripts/export-connect-credentials.mjs workbuddy --account 2    # 只导某个账号
+node scripts/export-connect-credentials.mjs trae
+node scripts/export-connect-credentials.mjs qoder                    # 自动解 App 登录态
+node scripts/export-connect-credentials.mjs qoder --pat pt-xxxx      # 或直接给官方 PAT
+node scripts/export-connect-credentials.mjs verify                   # 只校验，不写文件
+```
+
+各家要注意的地方：
+
+- **WorkBuddy** —— 凭据由 App 自带的 Electron 解封。**App 同时只保持一个登录**，
+  要导哪个账号就先在 App 里切到哪个；个人号与企业号各导一次。
+- **Trae** —— 登录态在客户端本地库里，解密是纯算法、不碰系统钥匙串，装过 Trae 就能导。
+- **Qoder** —— 优先解 App 的本地会话，读钥匙串时系统可能弹一次授权框；
+  解不出来就用官方 PAT 兜底。
+
+**不想跑脚本**：认证页每行的「粘贴」接受凭据原文，直接写进对应文件 ——
+适合从别的机器拷一份过来、或者临时换账号。
+
 ### 三、选模型：倍率就在名字里
 
 模型选择器里每个模型名后面跟着它**当前**的倍率，一眼能看出哪家便宜。
