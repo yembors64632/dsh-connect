@@ -29,7 +29,24 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { unseal } from './trae-vault.mjs';
 
-const APP_SUPPORT = path.join(os.homedir(), 'Library/Application Support/TRAE SOLO CN');
+/**
+ * Trae 桌面端的数据根目录（按平台）。
+ *
+ * macOS 在 `~/Library/Application Support/`，Windows 在 `%APPDATA%`（= Roaming）。
+ * 两边的**内部结构完全一致**（`User/globalStorage/{storage.json,state.vscdb}`），
+ * 凭据格式与信封算法也一致 —— Windows 版同样把登录态写成
+ * `iCubeAuthInfo://icube.cloudide` 的 byteCrypto 信封，而 `unseal()` 是纯 JS、
+ * 不依赖钥匙串，所以只需换根，不需要第二份脚本。
+ * （2026-10-06 在 Trae SOLO CN Windows 版实测导出成功。）
+ */
+function appSupportDir() {
+  if (process.platform === 'win32') {
+    return path.join(process.env.APPDATA ?? path.join(os.homedir(), 'AppData', 'Roaming'), 'TRAE SOLO CN');
+  }
+  return path.join(os.homedir(), 'Library/Application Support/TRAE SOLO CN');
+}
+
+const APP_SUPPORT = appSupportDir();
 const STORAGE_JSON = path.join(APP_SUPPORT, 'User/globalStorage/storage.json');
 const STATE_VSCDB = path.join(APP_SUPPORT, 'User/globalStorage/state.vscdb');
 
@@ -110,7 +127,10 @@ con = sqlite3.connect("file:%s?mode=ro" % urllib.parse.quote(sys.argv[1]), uri=T
 row = con.execute("SELECT value FROM ItemTable WHERE key=?", (sys.argv[2],)).fetchone()
 print(row[0] if row else "")
 `;
-  const r = spawnSync('python3', ['-c', py, STATE_VSCDB, key], { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 });
+  // Python 可执行名按平台：macOS/Linux 通常是 python3，Windows 上通常只有 python。
+  // 找不到就当"没有模型目录"降级（插件有内置兜底表），不让整次导出失败。
+  const python = process.platform === 'win32' ? 'python' : 'python3';
+  const r = spawnSync(python, ['-c', py, STATE_VSCDB, key], { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 });
   if (r.status !== 0 || !r.stdout.trim()) return undefined;
   let groups;
   try { groups = JSON.parse(r.stdout); } catch { return undefined; }

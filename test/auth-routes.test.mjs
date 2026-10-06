@@ -46,10 +46,13 @@ function makeHarness() {
       fn();
     },
     webServer: {
-      register({ kind, path, handler }) {
-        assert.equal(kind, "exact");
-        routes.set(path, handler);
-        return () => routes.delete(path);
+      register({ kind = "exact", path, handler }) {
+        // 真实 webServer 支持 'exact' 与 'prefix' 两种（见 dsh-host-webserver 的
+        // WebRouteKind）。这里按 kind 分别存放，取用时模拟宿主的"exact 优先、
+        // 其次最长前缀命中"。
+        assert.ok(kind === "exact" || kind === "prefix", `未知路由类型：${kind}`);
+        routes.set(`${kind} ${path}`, handler);
+        return () => routes.delete(`${kind} ${path}`);
       },
     },
   };
@@ -64,9 +67,27 @@ function makeHarness() {
   return { ctx, routes, settingsApi, store };
 }
 
+/** 按宿主语义取 handler：exact 命中优先，否则最长前缀命中。 */
+function resolveRoute(routes, pathname) {
+  const exact = routes.get(`exact ${pathname}`);
+  if (exact !== undefined) return exact;
+  let best;
+  let bestLength = -1;
+  for (const [key, handler] of routes) {
+    if (!key.startsWith("prefix ")) continue;
+    const prefix = key.slice("prefix ".length);
+    if (pathname !== prefix && !pathname.startsWith(`${prefix}/`)) continue;
+    if (prefix.length > bestLength) {
+      best = handler;
+      bestLength = prefix.length;
+    }
+  }
+  return best;
+}
+
 /** 把 Node 的 IncomingMessage/ServerResponse mock 到路由 handler 能用的程度。 */
 function call(routes, path, { method = "GET", body, timeoutMs = 15000 } = {}) {
-  const handler = routes.get(path);
+  const handler = resolveRoute(routes, path);
   assert.ok(handler !== undefined, `路由未注册：${path}`);
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(`路由处理超时：${method} ${path}`)), timeoutMs);
@@ -200,7 +221,7 @@ test("回环守卫：非回环 Host 一律 403", withTempHome(async () => {
     channels: () => registry.allChannels(),
     settingsApi: () => settingsApi,
   });
-  const handler = routes.get("/plugins/dsh-connect/auth");
+  const handler = resolveRoute(routes, "/plugins/dsh-connect/auth");
   await new Promise((resolve) => {
     const res = { statusCode: 0, writeHead(code) { this.statusCode = code; }, end(text) { assert.equal(this.statusCode, 403); resolve(); } };
     void handler({ method: "GET", url: "/plugins/dsh-connect/auth", headers: { host: "evil.example.com" } }, res);
